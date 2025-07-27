@@ -22,8 +22,10 @@
 ### `/myorders` - View all your orders
 **Usage:** `/myorders`
 - Shows ALL your current orders in the queue
+- Shows your recent completed orders (last 5)
 - Displays position, status, and priority for each
-- Quick overview of everything you have pending
+- Shows review status (⭐ reviewed, 📝 can review)
+- Reminds you about orders you can review
 
 ## 📊 **General Information**
 
@@ -52,10 +54,20 @@ These commands are **admin-only** and require special permissions:
 - `/createorder` - Only staff can create orders
 - `/complete` - Only staff can mark orders complete
 - `/updatestatus` - Only staff can update order status
-- `/removeorder` - Only staff can remove orders
+- `/removeorder`, `/eraseorder` - Only staff can remove orders
 - `/moveorder`, `/rush`, `/bulkcomplete` - Queue management
 - `/setduedate`, `/adddependency` - Order scheduling
 - `/savedata` - Data management
+- `/printlabel` - Only staff can print labels
+- `/sendreceipt` - Only staff can send receipts
+- `/history` - Only staff can view order history
+
+## 🧾 **What About Receipts?**
+When your order is completed:
+- **You'll be notified** via Discord DM that your order is complete
+- **Staff may send you a receipt** via both email and Discord DM
+- **Professional receipts** include all order details, pricing (if applicable), and timeline
+- **No action needed** from you - receipts are sent by staff when appropriate
 
 ## ❓ **Need Help?**
 If you need assistance with your order or have questions, please contact a staff member directly. They can help you with order creation, updates, and any issues you might encounter!

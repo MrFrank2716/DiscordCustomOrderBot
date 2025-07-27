@@ -11,6 +11,7 @@ A Discord bot designed to help track and process orders through your Discord ser
 - **`/updatestatus`** - Update the status of an existing order using dropdown menu
 - **`/removeorder`** - Remove an order from the queue (Admin only)
 - **`/findorder`** - Get a direct link to an order's ticket thread
+- **`/eraseorder`** - Permanently erase an order from the entire system (Admin only - USE WITH CAUTION)
 
 ### Advanced Queue Management (Admin Only)
 - **`/moveorder`** - Move an order to a specific position in the queue
@@ -20,21 +21,30 @@ A Discord bot designed to help track and process orders through your Discord ser
 ### Analytics & Reporting
 - **`/stats`** - View comprehensive order queue statistics and metrics
 - **`/overdue`** - View orders that are past their due dates
+- **`/history`** - View all completed orders with filtering and pagination (Admin only)
 
 ### Order Scheduling & Dependencies
 - **`/setduedate`** - Set a due date for an order (YYYY-MM-DD format)
 - **`/adddependency`** - Create dependencies between orders
 - **`/overdue`** - View orders that are past their due dates
 
+### Label Printing & Physical Management
+- **`/printlabel`** - Generate and email professional order labels to printer (Admin only)
+
+### Receipt System
+- **`/sendreceipt`** - Send professional receipts to customers via email and Discord DM (Admin only)
+
 ### Customer Commands
 - **`/position`** - Check your position in the queue
 - **`/orderstatus`** - Check the detailed status of a specific order
-- **`/myorders`** - View all your current orders with statuses
+- **`/myorders`** - View all your current and completed orders with review status
 - **`/review`** - Leave a review for a completed order with rating and optional image
 
 ## Key Features
 
 ✅ **Sequential Order Numbering** - Orders use linear codes like ED001, ED002, ED003 for easy tracking  
+✅ **Professional Label Printing** - Generate and email 4"x6" order labels directly to your printer  
+✅ **Professional Receipt System** - Send beautiful HTML receipts via email and Discord DM  
 ✅ **Customer Review System** - Verified customers can review completed orders with ratings and images  
 ✅ **Automatic Data Persistence** - All order data is automatically saved after every command  
 ✅ **Thread-Based Ticket Integration** - No longer moves tickets to categories, uses thread links  
@@ -86,6 +96,11 @@ npm install
    - `ADMIN_ROLE_ID` - Role ID for users who can use admin commands
    - `STAFF_ROLE_ID` - (Optional) Alternative admin role ID
    - `CLIENT_ID` - Your bot's application ID
+   - `PRINTER_EMAIL` - (Optional) Email address of your printer for label printing
+   - `SMTP_HOST` - (Optional) SMTP server for email sending (e.g., smtp.gmail.com)
+   - `SMTP_PORT` - (Optional) SMTP port (usually 587)
+   - `SMTP_USER` - (Optional) Email address for sending labels
+   - `SMTP_PASS` - (Optional) Email password/app password
 
 ### 4. Deploy Slash Commands
 ```bash

@@ -2,6 +2,7 @@ const { Client, GatewayIntentBits, Collection, EmbedBuilder, PermissionFlagsBits
 const { SlashCommandBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
+const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 const client = new Client({
@@ -45,6 +46,17 @@ const STATS_FILE = path.join(DATA_DIR, 'statistics.json');
 const DEPENDENCIES_FILE = path.join(DATA_DIR, 'dependencies.json');
 const DUE_DATES_FILE = path.join(DATA_DIR, 'due_dates.json');
 const ORDER_COUNTER_FILE = path.join(DATA_DIR, 'order_counter.json');
+
+// Email configuration for printer
+const emailTransporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: process.env.SMTP_PORT,
+    secure: false, // true for 465, false for other ports
+    auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS
+    }
+});
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
@@ -419,7 +431,91 @@ const commands = [
         .addAttachmentOption(option =>
             option.setName('image')
                 .setDescription('Optional image to include with your review')
+                .setRequired(false)),
+
+    // Print Label Command (Admin only) - Send order label to printer
+    new SlashCommandBuilder()
+        .setName('printlabel')
+        .setDescription('Generate and send an order label to the printer (Admin only)')
+        .addStringOption(option =>
+            option.setName('order_code')
+                .setDescription('The order code to print a label for')
+                .setRequired(true)),
+
+    // Send Receipt Command (Admin only) - Email receipt to customer
+    new SlashCommandBuilder()
+        .setName('sendreceipt')
+        .setDescription('Generate and email a receipt to the customer (Admin only)')
+        .addStringOption(option =>
+            option.setName('order_code')
+                .setDescription('The order code to send a receipt for')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('customer_email')
+                .setDescription('Customer email address')
+                .setRequired(true))
+        .addNumberOption(option =>
+            option.setName('subtotal')
+                .setDescription('Order subtotal amount (optional)')
                 .setRequired(false))
+        .addNumberOption(option =>
+            option.setName('tax')
+                .setDescription('Tax/VAT amount (optional)')
+                .setRequired(false))
+        .addStringOption(option =>
+            option.setName('payment_method')
+                .setDescription('Payment method used (optional)')
+                .setRequired(false)),
+
+    // Erase Order Command (Admin only) - Completely remove order from system
+    new SlashCommandBuilder()
+        .setName('eraseorder')
+        .setDescription('Completely erase an order from the system (Admin only - USE WITH CAUTION)')
+        .addStringOption(option =>
+            option.setName('order_code')
+                .setDescription('The order code to permanently erase')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('reason')
+                .setDescription('Reason for erasing this order (for logging purposes)')
+                .setRequired(true))
+        .addBooleanOption(option =>
+            option.setName('confirm')
+                .setDescription('Type "true" to confirm permanent deletion')
+                .setRequired(true)),
+
+    // History Command (Admin only) - View all completed orders
+    new SlashCommandBuilder()
+        .setName('history')
+        .setDescription('View all completed orders from the system history (Admin only)')
+        .addIntegerOption(option =>
+            option.setName('page')
+                .setDescription('Page number to view (default: 1)')
+                .setRequired(false)
+                .setMinValue(1))
+        .addStringOption(option =>
+            option.setName('customer')
+                .setDescription('Filter by customer (user ID or mention)')
+                .setRequired(false))
+        .addStringOption(option =>
+            option.setName('priority')
+                .setDescription('Filter by priority')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'Low', value: 'low' },
+                    { name: 'Normal', value: 'normal' },
+                    { name: 'High', value: 'high' },
+                    { name: 'Urgent', value: 'urgent' }
+                ))
+        .addStringOption(option =>
+            option.setName('sort')
+                .setDescription('Sort order for results')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'Newest First', value: 'newest' },
+                    { name: 'Oldest First', value: 'oldest' },
+                    { name: 'By Order Code', value: 'code' }
+                ))
 ];
 
 // Helper functions
@@ -643,6 +739,476 @@ function formatDuration(milliseconds) {
     if (days > 0) return `${days}d ${hours}h`;
     if (hours > 0) return `${hours}h ${minutes}m`;
     return `${minutes}m`;
+}
+
+// Generate HTML label for printing
+function generateOrderLabel(order) {
+    const priorityColors = {
+        'low': '#28a745',
+        'normal': '#007bff', 
+        'high': '#ffc107',
+        'urgent': '#dc3545'
+    };
+
+    const statusColors = {
+        'pending': '#6c757d',
+        'preparing': '#17a2b8',
+        'manufacturing': '#fd7e14',
+        'quality_check': '#20c997',
+        'ready': '#28a745',
+        'shipped': '#6f42c1',
+        'on_hold': '#ffc107',
+        'cancelled': '#dc3545'
+    };
+
+    const createdDate = new Date(order.createdAt).toLocaleDateString();
+    const dueDate = orderDueDates.get(order.code);
+    const position = getOrderPosition(order.code);
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 0; 
+            padding: 20px;
+            background: white;
+        }
+        .label {
+            width: 4in;
+            height: 6in;
+            border: 2px solid #000;
+            padding: 0.25in;
+            box-sizing: border-box;
+            page-break-after: always;
+        }
+        .header {
+            text-align: center;
+            border-bottom: 2px solid #000;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        .order-code {
+            font-size: 24px;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+        .priority {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            background-color: ${priorityColors[order.priority] || '#6c757d'};
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            background-color: ${statusColors[order.status] || '#6c757d'};
+            margin-left: 5px;
+        }
+        .info-row {
+            margin: 8px 0;
+            font-size: 11px;
+        }
+        .label-text {
+            font-weight: bold;
+            display: inline-block;
+            width: 80px;
+        }
+        .description {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+            background-color: #f8f9fa;
+            font-size: 10px;
+            height: 120px;
+            overflow: hidden;
+        }
+        .qr-placeholder {
+            width: 80px;
+            height: 80px;
+            border: 2px dashed #ccc;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #666;
+            float: right;
+            margin-top: -100px;
+        }
+        .footer {
+            position: absolute;
+            bottom: 0.25in;
+            left: 0.25in;
+            right: 0.25in;
+            text-align: center;
+            font-size: 10px;
+            border-top: 1px solid #ccc;
+            padding-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="label">
+        <div class="header">
+            <div class="order-code">${order.code}</div>
+            <div>
+                <span class="priority">${PRIORITIES[order.priority].name.toUpperCase()}</span>
+                <span class="status">${getStatusName(order.status).toUpperCase()}</span>
+            </div>
+        </div>
+        
+        <div class="info-row">
+            <span class="label-text">Customer:</span> ${order.customerTag}
+        </div>
+        <div class="info-row">
+            <span class="label-text">Position:</span> #${position} in queue
+        </div>
+        <div class="info-row">
+            <span class="label-text">Created:</span> ${createdDate}
+        </div>
+        ${dueDate ? `<div class="info-row"><span class="label-text">Due:</span> ${dueDate}</div>` : ''}
+        <div class="info-row">
+            <span class="label-text">Created by:</span> Staff
+        </div>
+        
+        <div class="description">
+            <strong>Description:</strong><br>
+            ${order.description}
+        </div>
+        
+        <div class="qr-placeholder">
+            QR Code<br>
+            ${order.code}
+        </div>
+        
+        <div class="footer">
+            Generated: ${new Date().toLocaleString()} | Order Management System
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
+// Send label to printer via email
+async function sendLabelToPrinter(order, interaction) {
+    try {
+        if (!process.env.PRINTER_EMAIL || !process.env.SMTP_USER) {
+            throw new Error('Printer email configuration missing');
+        }
+
+        const labelHTML = generateOrderLabel(order);
+        
+        const mailOptions = {
+            from: process.env.SMTP_USER,
+            to: process.env.PRINTER_EMAIL,
+            subject: `Order Label - ${order.code}`,
+            html: labelHTML,
+            attachments: [{
+                filename: `label-${order.code}.html`,
+                content: labelHTML,
+                contentType: 'text/html'
+            }]
+        };
+
+        await emailTransporter.sendMail(mailOptions);
+        return true;
+    } catch (error) {
+        console.error('Error sending label to printer:', error);
+        return false;
+    }
+}
+
+// Generate HTML receipt for completed orders
+function generateOrderReceipt(order, customerEmail, priceInfo = null) {
+    const completedDate = new Date(order.completedAt).toLocaleDateString();
+    const createdDate = new Date(order.createdAt).toLocaleDateString();
+    const completionTime = formatDuration(order.completedAt - order.createdAt);
+    
+    // Calculate basic pricing if not provided
+    const pricing = priceInfo || {
+        subtotal: 0.00,
+        tax: 0.00,
+        total: 0.00,
+        currency: 'GBP',
+        paymentMethod: 'Paid in advance'
+    };
+
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Receipt - Order ${order.code}</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; 
+            padding: 20px;
+            background: #f5f5f5;
+            color: #333;
+        }
+        .receipt {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            border-bottom: 3px solid #007bff;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+        .company-name {
+            font-size: 28px;
+            font-weight: bold;
+            color: #007bff;
+            margin: 0;
+        }
+        .receipt-title {
+            font-size: 24px;
+            color: #333;
+            margin: 10px 0 5px 0;
+        }
+        .order-code {
+            font-size: 18px;
+            color: #666;
+            font-weight: bold;
+        }
+        .section {
+            margin: 25px 0;
+        }
+        .section-title {
+            font-size: 16px;
+            font-weight: bold;
+            color: #007bff;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+            margin-bottom: 15px;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+            padding: 5px 0;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #555;
+        }
+        .info-value {
+            color: #333;
+        }
+        .description-box {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 15px;
+            margin: 10px 0;
+            font-style: italic;
+        }
+        .priority-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            color: white;
+            font-weight: bold;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+        .priority-low { background-color: #28a745; }
+        .priority-normal { background-color: #007bff; }
+        .priority-high { background-color: #ffc107; color: #333; }
+        .priority-urgent { background-color: #dc3545; }
+        .status-completed {
+            color: #28a745;
+            font-weight: bold;
+        }
+        .pricing-section {
+            background: #f8f9fa;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .price-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 8px 0;
+        }
+        .total-row {
+            border-top: 2px solid #007bff;
+            padding-top: 10px;
+            margin-top: 15px;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 40px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            color: #666;
+            font-size: 14px;
+        }
+        .thank-you {
+            background: linear-gradient(135deg, #007bff, #0056b3);
+            color: white;
+            padding: 20px;
+            border-radius: 6px;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .attachment-info {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            border-radius: 4px;
+            padding: 10px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="receipt">
+        <div class="header">
+            <h1 class="company-name">Order Management System</h1>
+            <h2 class="receipt-title">Order Receipt</h2>
+            <div class="order-code">Order #${order.code}</div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Order Information</div>
+            <div class="info-row">
+                <span class="info-label">Order Code:</span>
+                <span class="info-value">${order.code}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Customer:</span>
+                <span class="info-value">${order.customerTag}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Customer Email:</span>
+                <span class="info-value">${customerEmail}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Priority:</span>
+                <span class="priority-badge priority-${order.priority}">${PRIORITIES[order.priority].name}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Status:</span>
+                <span class="info-value status-completed">✅ Completed</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Timeline</div>
+            <div class="info-row">
+                <span class="info-label">Order Created:</span>
+                <span class="info-value">${createdDate}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Order Completed:</span>
+                <span class="info-value">${completedDate}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Processing Time:</span>
+                <span class="info-value">${completionTime}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">Completed By:</span>
+                <span class="info-value">Staff Member</span>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-title">Order Description</div>
+            <div class="description-box">
+                ${order.description}
+            </div>
+            ${order.attachment ? `
+            <div class="attachment-info">
+                <strong>📎 Attachment:</strong> ${order.attachment.name}
+            </div>
+            ` : ''}
+        </div>
+
+        ${pricing.total > 0 ? `
+        <div class="section">
+            <div class="section-title">Pricing Details</div>
+            <div class="pricing-section">
+                <div class="price-row">
+                    <span>Subtotal:</span>
+                    <span>£${pricing.subtotal.toFixed(2)}</span>
+                </div>
+                <div class="price-row">
+                    <span>Tax/VAT:</span>
+                    <span>£${pricing.tax.toFixed(2)}</span>
+                </div>
+                <div class="price-row total-row">
+                    <span>Total:</span>
+                    <span>£${pricing.total.toFixed(2)}</span>
+                </div>
+                <div class="info-row" style="margin-top: 15px;">
+                    <span class="info-label">Payment Method:</span>
+                    <span class="info-value">${pricing.paymentMethod}</span>
+                </div>
+            </div>
+        </div>
+        ` : ''}
+
+        <div class="thank-you">
+            <h3 style="margin: 0 0 10px 0;">Thank you for your order!</h3>
+            <p style="margin: 0;">We appreciate your business and hope you're satisfied with your completed order.</p>
+        </div>
+
+        <div class="footer">
+            <p>Receipt generated on ${new Date().toLocaleString()}</p>
+            <p>Order Management System | Professional Service Receipt</p>
+            <p>If you have any questions about this order, please contact us with order reference: ${order.code}</p>
+        </div>
+    </div>
+</body>
+</html>`;
+}
+
+// Send receipt to customer via email
+async function sendReceiptToCustomer(order, customerEmail, priceInfo = null) {
+    try {
+        if (!process.env.SMTP_USER) {
+            throw new Error('Email configuration missing');
+        }
+
+        const receiptHTML = generateOrderReceipt(order, customerEmail, priceInfo);
+        
+        const mailOptions = {
+            from: process.env.SMTP_USER,
+            to: customerEmail,
+            subject: `Order Receipt - ${order.code} | Order Complete`,
+            html: receiptHTML,
+            attachments: [{
+                filename: `receipt-${order.code}.html`,
+                content: receiptHTML,
+                contentType: 'text/html'
+            }]
+        };
+
+        await emailTransporter.sendMail(mailOptions);
+        return true;
+    } catch (error) {
+        console.error('Error sending receipt to customer:', error);
+        return false;
+    }
 }
 
 // Check for orders that need attention (overdue, long-pending)
@@ -1176,8 +1742,10 @@ async function handleSlashCommand(interaction) {
                         .addFields(
                             { name: 'Order Code', value: completeOrderCode },
                             { name: 'Description', value: orderToComplete.description.substring(0, 1024) },
-                            { name: 'Ticket Thread', value: orderToComplete.threadLink || 'No thread linked' }
+                            { name: 'Ticket Thread', value: `[Click here to go to ticket](${getThreadLink(orderToComplete.channelId, interaction.guild.id)})` },
+                            { name: 'What\'s Next?', value: '• A staff member may send you a receipt via email and Discord DM\n• You can leave a review using `/review ' + completeOrderCode + '`\n• Check your email for any additional documentation' }
                         )
+                        .setFooter({ text: 'Thank you for choosing our services!' })
                         .setTimestamp();
                     
                     await customer.send({ embeds: [dmEmbed] });
@@ -1285,7 +1853,7 @@ async function handleSlashCommand(interaction) {
                         { name: 'Created', value: `<t:${Math.floor(statusOrder.createdAt / 1000)}:R>`, inline: true },
                         { name: 'Created by', value: `<@${statusOrder.createdBy}>`, inline: true },
                         { name: 'Description', value: statusOrder.description.substring(0, 1024) },
-                        { name: 'Ticket Thread', value: statusOrder.threadLink || 'No thread linked' }
+                        { name: 'Ticket Thread', value: `[Click here to go to ticket](${getThreadLink(statusOrder.channelId, interaction.guild.id)})` }
                     )
                     .setTimestamp();
 
@@ -1293,32 +1861,74 @@ async function handleSlashCommand(interaction) {
                 break;
 
             case 'myorders':
-                const myOrders = Array.from(orderQueue.values()).filter(order => order.customerId === interaction.user.id);
+                const myActiveOrders = Array.from(orderQueue.values()).filter(order => order.customerId === interaction.user.id);
+                const myCompletedOrders = Array.from(orderHistory.values()).filter(order => order.customerId === interaction.user.id);
                 
-                if (myOrders.length === 0) {
+                if (myActiveOrders.length === 0 && myCompletedOrders.length === 0) {
                     return interaction.reply({ 
-                        content: '📭 You don\'t have any orders in the queue.', 
+                        content: '📭 You don\'t have any orders (current or completed).', 
                         ephemeral: true 
                     });
                 }
 
                 const myOrdersEmbed = new EmbedBuilder()
-                    .setTitle('📋 Your Current Orders')
+                    .setTitle('📋 Your Orders')
                     .setColor(0x0099ff)
-                    .setDescription(`You have ${myOrders.length} order(s) in the queue`)
+                    .setDescription(`**Active Orders:** ${myActiveOrders.length} | **Completed Orders:** ${myCompletedOrders.length}`)
                     .setTimestamp();
 
-                const myOrdersList = myOrders.map(order => {
-                    const position = getOrderPosition(order.code);
-                    const timeAgo = Math.floor((Date.now() - order.createdAt) / (1000 * 60 * 60 * 24));
-                    return `**Order ${order.code}** - Position: ${position}\n` +
-                           `${getStatusEmoji(order.status)} ${getStatusName(order.status)}\n` +
-                           `${getPriorityEmoji(order.priority)} ${PRIORITIES[order.priority].name} Priority\n` +
-                           `Created ${timeAgo > 0 ? `${timeAgo} day(s) ago` : 'today'}\n` +
-                           `${order.description.substring(0, 150)}${order.description.length > 150 ? '...' : ''}`;
-                }).join('\n\n');
+                // Add current orders section
+                if (myActiveOrders.length > 0) {
+                    const activeOrdersList = myActiveOrders.map(order => {
+                        const position = getOrderPosition(order.code);
+                        const timeAgo = Math.floor((Date.now() - order.createdAt) / (1000 * 60 * 60 * 24));
+                        return `**${order.code}** - Position: ${position}\n` +
+                               `${getStatusEmoji(order.status)} ${getStatusName(order.status)} | ${getPriorityEmoji(order.priority)} ${PRIORITIES[order.priority].name}\n` +
+                               `Created ${timeAgo > 0 ? `${timeAgo} day(s) ago` : 'today'}\n` +
+                               `${order.description.substring(0, 100)}${order.description.length > 100 ? '...' : ''}`;
+                    }).join('\n\n');
 
-                myOrdersEmbed.addFields({ name: 'Orders', value: myOrdersList });
+                    myOrdersEmbed.addFields({ 
+                        name: '🔄 Current Orders in Queue', 
+                        value: activeOrdersList.substring(0, 1024), 
+                        inline: false 
+                    });
+                }
+
+                // Add completed orders section (limit to most recent 5)
+                if (myCompletedOrders.length > 0) {
+                    const recentCompletedOrders = myCompletedOrders
+                        .sort((a, b) => b.completedAt - a.completedAt)
+                        .slice(0, 5);
+
+                    const completedOrdersList = recentCompletedOrders.map(order => {
+                        const completedAgo = Math.floor((Date.now() - order.completedAt) / (1000 * 60 * 60 * 24));
+                        const hasReview = orderReviews.has(order.code);
+                        return `**${order.code}** ${hasReview ? '⭐' : '📝'}\n` +
+                               `✅ Completed ${completedAgo > 0 ? `${completedAgo} day(s) ago` : 'today'}\n` +
+                               `${getPriorityEmoji(order.priority)} ${PRIORITIES[order.priority].name} Priority\n` +
+                               `${order.description.substring(0, 100)}${order.description.length > 100 ? '...' : ''}`;
+                    }).join('\n\n');
+
+                    const completedFieldName = myCompletedOrders.length > 5 
+                        ? `✅ Recent Completed Orders (${recentCompletedOrders.length} of ${myCompletedOrders.length})`
+                        : `✅ Completed Orders (${myCompletedOrders.length})`;
+
+                    myOrdersEmbed.addFields({ 
+                        name: completedFieldName, 
+                        value: completedOrdersList.substring(0, 1024), 
+                        inline: false 
+                    });
+
+                    // Add review reminder for orders without reviews
+                    const unreviewed = myCompletedOrders.filter(order => !orderReviews.has(order.code));
+                    if (unreviewed.length > 0) {
+                        myOrdersEmbed.setFooter({ 
+                            text: `💡 You have ${unreviewed.length} completed order(s) that can be reviewed! Use /review to leave feedback.` 
+                        });
+                    }
+                }
+
                 await interaction.reply({ embeds: [myOrdersEmbed], ephemeral: true });
                 break;
 
@@ -1907,6 +2517,503 @@ async function handleSlashCommand(interaction) {
 
                 // Save data after review
                 saveOrderData();
+                break;
+
+            case 'printlabel':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to print labels.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const printOrderCode = interaction.options.getString('order_code').toUpperCase();
+                
+                // Check if order exists in queue or history
+                let orderToPrint = orderQueue.get(printOrderCode);
+                let isCompleted = false;
+                
+                if (!orderToPrint) {
+                    orderToPrint = orderHistory.get(printOrderCode);
+                    isCompleted = true;
+                }
+
+                if (!orderToPrint) {
+                    return interaction.reply({ 
+                        content: `❌ Order ${printOrderCode} not found.`, 
+                        ephemeral: true 
+                    });
+                }
+
+                // Check if email is configured
+                if (!process.env.PRINTER_EMAIL || !process.env.SMTP_USER) {
+                    return interaction.reply({ 
+                        content: '❌ Printer email not configured. Please set PRINTER_EMAIL and SMTP settings in .env file.', 
+                        ephemeral: true 
+                    });
+                }
+
+                // Send initial response
+                await interaction.reply({ 
+                    content: `🖨️ Generating label for order ${printOrderCode}...`, 
+                    ephemeral: true 
+                });
+
+                // Send label to printer
+                const success = await sendLabelToPrinter(orderToPrint, interaction);
+
+                if (success) {
+                    const printEmbed = new EmbedBuilder()
+                        .setTitle('🖨️ Label Sent to Printer')
+                        .setColor(0x00ff00)
+                        .addFields(
+                            { name: 'Order Code', value: printOrderCode, inline: true },
+                            { name: 'Customer', value: `<@${orderToPrint.customerId}>`, inline: true },
+                            { name: 'Status', value: isCompleted ? '✅ Completed' : `${getStatusEmoji(orderToPrint.status)} ${getStatusName(orderToPrint.status)}`, inline: true },
+                            { name: 'Priority', value: `${getPriorityEmoji(orderToPrint.priority)} ${PRIORITIES[orderToPrint.priority].name}`, inline: true },
+                            { name: 'Printer Email', value: process.env.PRINTER_EMAIL, inline: true },
+                            { name: 'Label Type', value: 'Standard Order Label (4" x 6")', inline: true }
+                        )
+                        .setFooter({ text: 'Label should print within a few minutes' })
+                        .setTimestamp();
+
+                    await interaction.editReply({ content: '', embeds: [printEmbed] });
+                    
+                    // Log the print action
+                    await logOrderAction(interaction.guild, 'Label Printed', orderToPrint, interaction.user);
+                } else {
+                    await interaction.editReply({ 
+                        content: '❌ Failed to send label to printer. Check console for details and verify email configuration.', 
+                    });
+                }
+                break;
+
+            case 'sendreceipt':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to send receipts.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const receiptOrderCode = interaction.options.getString('order_code').toUpperCase();
+                const customerEmail = interaction.options.getString('customer_email');
+                const subtotal = interaction.options.getNumber('subtotal') || 0;
+                const tax = interaction.options.getNumber('tax') || 0;
+                const paymentMethod = interaction.options.getString('payment_method') || 'Paid in advance';
+                
+                // Check if order exists (must be completed to send receipt)
+                const completedOrderForReceipt = orderHistory.get(receiptOrderCode);
+
+                if (!completedOrderForReceipt) {
+                    return interaction.reply({ 
+                        content: `❌ Order ${receiptOrderCode} not found in completed orders. Only completed orders can have receipts sent.`, 
+                        ephemeral: true 
+                    });
+                }
+
+                // Check if email is configured
+                if (!process.env.SMTP_USER) {
+                    return interaction.reply({ 
+                        content: '❌ Email not configured. Please set SMTP settings in .env file.', 
+                        ephemeral: true 
+                    });
+                }
+
+                // Validate email format
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                if (!emailRegex.test(customerEmail)) {
+                    return interaction.reply({ 
+                        content: '❌ Invalid email address format.', 
+                        ephemeral: true 
+                    });
+                }
+
+                // Create pricing info
+                const total = subtotal + tax;
+                const priceInfo = {
+                    subtotal: subtotal,
+                    tax: tax,
+                    total: total,
+                    currency: 'GBP',
+                    paymentMethod: paymentMethod
+                };
+
+                // Send initial response
+                await interaction.reply({ 
+                    content: `📧 Generating and sending receipt for order ${receiptOrderCode} to ${customerEmail} and Discord DM...`, 
+                    ephemeral: true 
+                });
+
+                // Send receipt to customer via email
+                const receiptSuccess = await sendReceiptToCustomer(completedOrderForReceipt, customerEmail, priceInfo);
+
+                // Send receipt to customer via Discord DM
+                let dmSuccess = false;
+                try {
+                    const customer = await client.users.fetch(completedOrderForReceipt.customerId);
+                    
+                    const dmReceiptEmbed = new EmbedBuilder()
+                        .setTitle('🧾 Order Receipt')
+                        .setColor(0x00ff00)
+                        .addFields(
+                            { name: 'Order Code', value: receiptOrderCode, inline: true },
+                            { name: 'Status', value: '✅ Completed', inline: true },
+                            { name: 'Completed Date', value: `<t:${Math.floor(completedOrderForReceipt.completedAt / 1000)}:D>`, inline: true },
+                            { name: 'Priority', value: `${getPriorityEmoji(completedOrderForReceipt.priority)} ${PRIORITIES[completedOrderForReceipt.priority].name}`, inline: true },
+                            { name: 'Processing Time', value: formatDuration(completedOrderForReceipt.completedAt - completedOrderForReceipt.createdAt), inline: true },
+                            { name: 'Payment Method', value: paymentMethod, inline: true }
+                        )
+                        .addFields(
+                            { name: 'Order Description', value: completedOrderForReceipt.description.substring(0, 1024) }
+                        );
+
+                    // Add pricing information if provided
+                    if (total > 0) {
+                        dmReceiptEmbed.addFields(
+                            { name: 'Pricing Details', value: `**Subtotal:** £${subtotal.toFixed(2)}\n**Tax/VAT:** £${tax.toFixed(2)}\n**Total:** £${total.toFixed(2)}`, inline: false }
+                        );
+                    }
+
+                    dmReceiptEmbed.addFields(
+                        { name: 'Thank You!', value: 'Thank you for your order! We hope you\'re satisfied with the completed work. A detailed receipt has also been sent to your email address.', inline: false }
+                    );
+
+                    if (completedOrderForReceipt.attachment) {
+                        dmReceiptEmbed.addFields({ name: 'Original Attachment', value: `[${completedOrderForReceipt.attachment.name}](${completedOrderForReceipt.attachment.url})` });
+                        if (completedOrderForReceipt.attachment.contentType && completedOrderForReceipt.attachment.contentType.startsWith('image/')) {
+                            dmReceiptEmbed.setThumbnail(completedOrderForReceipt.attachment.url);
+                        }
+                    }
+
+                    dmReceiptEmbed.setFooter({ text: `Order Management System | Receipt generated on ${new Date().toLocaleDateString()}` })
+                        .setTimestamp();
+
+                    await customer.send({ embeds: [dmReceiptEmbed] });
+                    dmSuccess = true;
+                } catch (error) {
+                    console.log('Could not send DM receipt to customer:', error);
+                    dmSuccess = false;
+                }
+
+                if (receiptSuccess || dmSuccess) {
+                    const deliveryMethods = [];
+                    if (receiptSuccess) deliveryMethods.push('📧 Email');
+                    if (dmSuccess) deliveryMethods.push('💬 Discord DM');
+                    
+                    const receiptEmbed = new EmbedBuilder()
+                        .setTitle('🧾 Receipt Sent Successfully')
+                        .setColor(0x00ff00)
+                        .addFields(
+                            { name: 'Order Code', value: receiptOrderCode, inline: true },
+                            { name: 'Customer', value: `<@${completedOrderForReceipt.customerId}>`, inline: true },
+                            { name: 'Email Sent To', value: receiptSuccess ? customerEmail : '❌ Failed', inline: true },
+                            { name: 'Discord DM', value: dmSuccess ? '✅ Sent' : '❌ Failed', inline: true },
+                            { name: 'Delivery Methods', value: deliveryMethods.join(', '), inline: true },
+                            { name: 'Subtotal', value: subtotal > 0 ? `£${subtotal.toFixed(2)}` : 'Not specified', inline: true },
+                            { name: 'Tax/VAT', value: tax > 0 ? `£${tax.toFixed(2)}` : 'Not specified', inline: true },
+                            { name: 'Total', value: total > 0 ? `£${total.toFixed(2)}` : 'Not specified', inline: true },
+                            { name: 'Payment Method', value: paymentMethod, inline: true }
+                        )
+                        .setFooter({ text: 'Receipt delivered via multiple channels' })
+                        .setTimestamp();
+
+                    await interaction.editReply({ content: '', embeds: [receiptEmbed] });
+                    
+                    // Log the receipt action
+                    await logOrderAction(interaction.guild, 'Receipt Sent', completedOrderForReceipt, interaction.user);
+                } else {
+                    await interaction.editReply({ 
+                        content: '❌ Failed to send receipt. Check console for details and verify email configuration.', 
+                    });
+                }
+                break;
+
+            case 'eraseorder':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to erase orders.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const eraseOrderCode = interaction.options.getString('order_code').toUpperCase();
+                const eraseReason = interaction.options.getString('reason');
+                const confirmErase = interaction.options.getBoolean('confirm');
+                
+                // Double-check confirmation
+                if (!confirmErase) {
+                    return interaction.reply({ 
+                        content: '❌ Order erase cancelled. You must set "confirm" to true to permanently delete an order.', 
+                        ephemeral: true 
+                    });
+                }
+
+                // Find the order in queue or history
+                let orderToErase = orderQueue.get(eraseOrderCode);
+                let wasActive = true;
+                let orderLocation = 'active queue';
+                
+                if (!orderToErase) {
+                    orderToErase = orderHistory.get(eraseOrderCode);
+                    wasActive = false;
+                    orderLocation = 'history';
+                }
+
+                if (!orderToErase) {
+                    return interaction.reply({ 
+                        content: `❌ Order ${eraseOrderCode} not found in either active queue or history.`, 
+                        ephemeral: true 
+                    });
+                }
+
+                // Create backup info before deletion
+                const backupInfo = {
+                    ...orderToErase,
+                    erasedAt: Date.now(),
+                    erasedBy: interaction.user.id,
+                    erasedReason: eraseReason,
+                    wasActive: wasActive
+                };
+
+                // Remove from all systems
+                if (wasActive) {
+                    orderQueue.delete(eraseOrderCode);
+                } else {
+                    orderHistory.delete(eraseOrderCode);
+                }
+
+                // Remove from related data structures
+                orderReviews.delete(eraseOrderCode);
+                orderDependencies.delete(eraseOrderCode);
+                orderDueDates.delete(eraseOrderCode);
+
+                // Remove this order from other orders' dependencies
+                for (const [code, deps] of orderDependencies.entries()) {
+                    const updatedDeps = deps.filter(dep => dep !== eraseOrderCode);
+                    if (updatedDeps.length !== deps.length) {
+                        orderDependencies.set(code, updatedDeps);
+                    }
+                }
+
+                // Update statistics if it was a completed order
+                if (!wasActive && orderToErase.status === 'completed') {
+                    orderStatistics.totalCompleted = Math.max(0, orderStatistics.totalCompleted - 1);
+                    
+                    // Remove from completion times (simplified - just recalculate)
+                    const allTimes = Object.values(orderStatistics.completionTimesByPriority).flat();
+                    if (allTimes.length > 0) {
+                        orderStatistics.averageCompletionTime = allTimes.reduce((sum, time) => sum + time, 0) / allTimes.length;
+                    } else {
+                        orderStatistics.averageCompletionTime = 0;
+                    }
+                }
+
+                // Save data after erasure
+                saveOrderData();
+
+                // Create detailed log embed
+                const eraseEmbed = new EmbedBuilder()
+                    .setTitle('🗑️ Order Permanently Erased')
+                    .setColor(0xff0000)
+                    .addFields(
+                        { name: 'Order Code', value: eraseOrderCode, inline: true },
+                        { name: 'Customer', value: `<@${orderToErase.customerId}>`, inline: true },
+                        { name: 'Erased by', value: `<@${interaction.user.id}>`, inline: true },
+                        { name: 'Original Status', value: `${getStatusEmoji(orderToErase.status)} ${getStatusName(orderToErase.status)}`, inline: true },
+                        { name: 'Original Priority', value: `${getPriorityEmoji(orderToErase.priority)} ${PRIORITIES[orderToErase.priority].name}`, inline: true },
+                        { name: 'Location', value: `${orderLocation}`, inline: true },
+                        { name: 'Reason for Erasure', value: eraseReason, inline: false },
+                        { name: 'Original Description', value: orderToErase.description.substring(0, 1024), inline: false },
+                        { name: '⚠️ WARNING', value: 'This order has been **permanently deleted** from all systems and cannot be recovered.', inline: false }
+                    )
+                    .setFooter({ text: 'This action cannot be undone' })
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [eraseEmbed] });
+
+                // Log the erasure action with special logging
+                try {
+                    const logChannelId = process.env.LOG_CHANNEL_ID;
+                    if (logChannelId) {
+                        const logChannel = interaction.guild.channels.cache.get(logChannelId);
+                        if (logChannel) {
+                            const logEmbed = new EmbedBuilder()
+                                .setTitle('🚨 CRITICAL: Order Permanently Erased')
+                                .setColor(0xff0000)
+                                .addFields(
+                                    { name: 'Order Code', value: eraseOrderCode, inline: true },
+                                    { name: 'Customer', value: `<@${orderToErase.customerId}>`, inline: true },
+                                    { name: 'Erased by', value: `<@${interaction.user.id}>`, inline: true },
+                                    { name: 'Erasure Reason', value: eraseReason, inline: false },
+                                    { name: 'Original Order Info', value: `Status: ${getStatusName(orderToErase.status)}\nPriority: ${PRIORITIES[orderToErase.priority].name}\nCreated: <t:${Math.floor(orderToErase.createdAt / 1000)}:F>`, inline: false },
+                                    { name: 'Data Removed From', value: '• Active queue or history\n• Reviews\n• Dependencies\n• Due dates\n• Statistics', inline: false }
+                                )
+                                .setTimestamp();
+
+                            await logChannel.send({ embeds: [logEmbed] });
+                        }
+                    }
+                } catch (error) {
+                    console.error('Error logging order erasure:', error);
+                }
+
+                // Notify customer that their order was erased (optional, might be sensitive)
+                try {
+                    const customer = await client.users.fetch(orderToErase.customerId);
+                    const dmEmbed = new EmbedBuilder()
+                        .setTitle('📋 Order Status Update')
+                        .setColor(0xffa500)
+                        .addFields(
+                            { name: 'Order Code', value: eraseOrderCode },
+                            { name: 'Status Update', value: 'Your order has been removed from our system.' },
+                            { name: 'Note', value: 'If you have questions about this change, please contact our staff.' }
+                        )
+                        .setTimestamp();
+                    
+                    await customer.send({ embeds: [dmEmbed] });
+                } catch (error) {
+                    console.log('Could not notify customer about order erasure:', error);
+                }
+                break;
+
+            case 'history':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to view order history.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const page = interaction.options.getInteger('page') || 1;
+                const customerFilter = interaction.options.getString('customer');
+                const priorityFilter = interaction.options.getString('priority');
+                const sortOrder = interaction.options.getString('sort') || 'newest';
+                
+                // Get all completed orders
+                let historyOrders = Array.from(orderHistory.values());
+                
+                if (historyOrders.length === 0) {
+                    return interaction.reply({ 
+                        content: '📭 No completed orders found in the system history.', 
+                        ephemeral: true 
+                    });
+                }
+
+                // Apply customer filter
+                if (customerFilter) {
+                    // Extract user ID from mention or use as-is
+                    const userId = customerFilter.replace(/[<@!>]/g, '');
+                    historyOrders = historyOrders.filter(order => order.customerId === userId);
+                    
+                    if (historyOrders.length === 0) {
+                        return interaction.reply({ 
+                            content: `📭 No completed orders found for customer ${customerFilter}.`, 
+                            ephemeral: true 
+                        });
+                    }
+                }
+
+                // Apply priority filter
+                if (priorityFilter) {
+                    historyOrders = historyOrders.filter(order => order.priority === priorityFilter);
+                    
+                    if (historyOrders.length === 0) {
+                        return interaction.reply({ 
+                            content: `📭 No completed orders found with ${priorityFilter} priority.`, 
+                            ephemeral: true 
+                        });
+                    }
+                }
+
+                // Sort orders
+                switch (sortOrder) {
+                    case 'oldest':
+                        historyOrders.sort((a, b) => a.completedAt - b.completedAt);
+                        break;
+                    case 'code':
+                        historyOrders.sort((a, b) => a.code.localeCompare(b.code));
+                        break;
+                    case 'newest':
+                    default:
+                        historyOrders.sort((a, b) => b.completedAt - a.completedAt);
+                        break;
+                }
+
+                // Pagination
+                const ordersPerPage = 8;
+                const totalPages = Math.ceil(historyOrders.length / ordersPerPage);
+                const startIndex = (page - 1) * ordersPerPage;
+                const endIndex = Math.min(startIndex + ordersPerPage, historyOrders.length);
+                const ordersToShow = historyOrders.slice(startIndex, endIndex);
+
+                if (page > totalPages) {
+                    return interaction.reply({ 
+                        content: `📭 Page ${page} doesn't exist. Total pages: ${totalPages}`, 
+                        ephemeral: true 
+                    });
+                }
+
+                // Create embed
+                const historyEmbed = new EmbedBuilder()
+                    .setTitle('📚 Order History')
+                    .setColor(0x0099ff)
+                    .setDescription(`Showing completed orders (Page ${page}/${totalPages})`);
+
+                // Add filters info if any
+                const filtersApplied = [];
+                if (customerFilter) filtersApplied.push(`Customer: <@${customerFilter.replace(/[<@!>]/g, '')}>`);
+                if (priorityFilter) filtersApplied.push(`Priority: ${PRIORITIES[priorityFilter].name}`);
+                if (filtersApplied.length > 0) {
+                    historyEmbed.addFields({ name: 'Filters Applied', value: filtersApplied.join(' • '), inline: false });
+                }
+
+                // Add order list
+                const historyOrderList = ordersToShow.map((order, index) => {
+                    const globalIndex = startIndex + index + 1;
+                    const completedDate = new Date(order.completedAt).toLocaleDateString();
+                    const processingTime = formatDuration(order.completedAt - order.createdAt);
+                    const hasReview = orderReviews.has(order.code);
+                    
+                    return `**${globalIndex}.** ${getPriorityEmoji(order.priority)} Order **${order.code}** - <@${order.customerId}>\n` +
+                           `└ ✅ Completed on ${completedDate}\n` +
+                           `└ ⏱️ Processing time: ${processingTime}\n` +
+                           `└ ${hasReview ? '⭐ Has review' : '📝 No review'}\n` +
+                           `└ ${order.description.substring(0, 80)}${order.description.length > 80 ? '...' : ''}`;
+                }).join('\n\n');
+
+                historyEmbed.addFields({ name: `Completed Orders (${historyOrders.length} total)`, value: historyOrderList || 'No orders found' });
+
+                // Add summary statistics
+                const avgProcessingTime = historyOrders.length > 0 ? 
+                    historyOrders.reduce((sum, order) => sum + (order.completedAt - order.createdAt), 0) / historyOrders.length : 0;
+                const historyPriorityCounts = {
+                    low: historyOrders.filter(o => o.priority === 'low').length,
+                    normal: historyOrders.filter(o => o.priority === 'normal').length,
+                    high: historyOrders.filter(o => o.priority === 'high').length,
+                    urgent: historyOrders.filter(o => o.priority === 'urgent').length
+                };
+                const reviewsCount = historyOrders.filter(order => orderReviews.has(order.code)).length;
+
+                historyEmbed.addFields({
+                    name: 'Summary Statistics',
+                    value: `**Average Processing Time:** ${formatDuration(avgProcessingTime)}\n` +
+                           `**Priority Breakdown:** ${historyPriorityCounts.urgent}🔴 ${historyPriorityCounts.high}🟠 ${historyPriorityCounts.normal}🟡 ${historyPriorityCounts.low}🟢\n` +
+                           `**Orders with Reviews:** ${reviewsCount}/${historyOrders.length} (${Math.round(reviewsCount/historyOrders.length*100)}%)`,
+                    inline: false
+                });
+
+                // Navigation info
+                if (totalPages > 1) {
+                    let navigationText = `Page ${page} of ${totalPages}`;
+                    if (page > 1) navigationText += ` • Use \`/history page:${page - 1}\` for previous`;
+                    if (page < totalPages) navigationText += ` • Use \`/history page:${page + 1}\` for next`;
+                    historyEmbed.setFooter({ text: navigationText });
+                }
+
+                historyEmbed.setTimestamp();
+
+                await interaction.reply({ embeds: [historyEmbed], ephemeral: true });
                 break;
 
             default:
