@@ -1,0 +1,32 @@
+{
+  "name": "discord-custom-order-bot",
+  "version": "1.0.0",
+  "description": "A Discord bot for tracking and managing custom orders with queue functionality",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js",
+    "dev": "nodemon bot.js",
+    "pm2:start": "pm2 start bot.js --name discord-order-bot",
+    "pm2:stop": "pm2 stop discord-order-bot",
+    "pm2:restart": "pm2 restart discord-order-bot",
+    "pm2:logs": "pm2 logs discord-order-bot",
+    "pm2:status": "pm2 status"
+  },
+  "keywords": [
+    "discord",
+    "bot",
+    "orders",
+    "queue",
+    "management"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "pm2": "^5.3.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

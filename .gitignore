@@ -1,0 +1,10 @@
+node_modules/
+.env
+*.log
+logs/
+.DS_Store
+Thumbs.db
+.pm2/
+
+# Data files (contain sensitive order information)
+data/*.json
