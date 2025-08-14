@@ -41,6 +41,27 @@
 - Public command showing all overdue orders
 - Helps you understand queue delays
 
+## 🎫 **Promotional Tokens**
+
+If you have a promotional token from a marketing campaign or special offer:
+
+### Using Your Token
+1. **Give your token code to staff** when they create your order
+2. **Staff will use:** `/createorder token_code:YOUR_CODE` when setting up your order
+3. **Token validation happens automatically** - staff will know if your token is valid
+4. **Your token becomes "used"** automatically when your order is completed
+
+### Token Information
+- **Tokens are 5-character codes** (like `A1B2C` or `X9Y8Z`)
+- **Each token can only be used once** - they cannot be reused
+- **Tokens may have expiration dates** - check with staff if you're unsure
+- **Staff can verify your token** before creating your order
+
+### If Your Token Doesn't Work
+- **Double-check the code** - tokens are case-sensitive
+- **Check expiration** - promotional campaigns may have ended
+- **Contact staff** - they can verify token status and help resolve issues
+
 ## 💡 **Tips for Customers**
 
 ✅ **Order codes are always in format:** `ED001`, `ED002`, etc.
@@ -61,6 +82,7 @@ These commands are **admin-only** and require special permissions:
 - `/printlabel` - Only staff can print labels
 - `/sendreceipt` - Only staff can send receipts
 - `/history` - Only staff can view order history
+- `/generatetoken`, `/checktoken`, `/removetoken`, `/listtokens` - Token management
 
 ## 🧾 **What About Receipts?**
 When your order is completed:

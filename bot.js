@@ -19,6 +19,9 @@ const orderReviews = new Map(); // Maps order codes to reviews
 const orderDependencies = new Map(); // Maps order codes to their dependencies
 const orderDueDates = new Map(); // Maps order codes to due dates
 
+// Promotional token system
+const promotionalTokens = new Map(); // Maps token codes to token data
+
 // Order numbering system
 let currentOrderNumber = 1; // Linear order numbering starting from 1
 
@@ -46,6 +49,7 @@ const STATS_FILE = path.join(DATA_DIR, 'statistics.json');
 const DEPENDENCIES_FILE = path.join(DATA_DIR, 'dependencies.json');
 const DUE_DATES_FILE = path.join(DATA_DIR, 'due_dates.json');
 const ORDER_COUNTER_FILE = path.join(DATA_DIR, 'order_counter.json');
+const TOKENS_FILE = path.join(DATA_DIR, 'tokens.json');
 
 // Email configuration for printer
 const emailTransporter = nodemailer.createTransport({
@@ -72,6 +76,7 @@ function saveOrderData() {
         const reviewsObject = Object.fromEntries(orderReviews);
         const dependenciesObject = Object.fromEntries(orderDependencies);
         const dueDatesObject = Object.fromEntries(orderDueDates);
+        const tokensObject = Object.fromEntries(promotionalTokens);
         
         fs.writeFileSync(ORDERS_FILE, JSON.stringify(ordersObject, null, 2));
         fs.writeFileSync(HISTORY_FILE, JSON.stringify(historyObject, null, 2));
@@ -80,6 +85,7 @@ function saveOrderData() {
         fs.writeFileSync(DEPENDENCIES_FILE, JSON.stringify(dependenciesObject, null, 2));
         fs.writeFileSync(DUE_DATES_FILE, JSON.stringify(dueDatesObject, null, 2));
         fs.writeFileSync(ORDER_COUNTER_FILE, JSON.stringify({ currentOrderNumber }, null, 2));
+        fs.writeFileSync(TOKENS_FILE, JSON.stringify(tokensObject, null, 2));
         
         console.log('✅ Order data saved successfully');
     } catch (error) {
@@ -153,6 +159,16 @@ function loadOrderData() {
             console.log(`📅 Loaded ${orderDueDates.size} order due dates from storage`);
         }
         
+        // Load promotional tokens
+        if (fs.existsSync(TOKENS_FILE)) {
+            const tokensData = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
+            promotionalTokens.clear();
+            for (const [key, value] of Object.entries(tokensData)) {
+                promotionalTokens.set(key, value);
+            }
+            console.log(`🎫 Loaded ${promotionalTokens.size} promotional tokens from storage`);
+        }
+        
         console.log('✅ All order data loaded successfully');
     } catch (error) {
         console.error('❌ Error loading order data:', error);
@@ -183,6 +199,41 @@ function generateOrderCode() {
     const code = `ED${currentOrderNumber.toString().padStart(3, '0')}`;
     currentOrderNumber++;
     return code;
+}
+
+// Generate random 5-character token code (letters and numbers)
+function generateTokenCode() {
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let result = '';
+    for (let i = 0; i < 5; i++) {
+        result += characters.charAt(Math.floor(Math.random() * characters.length));
+    }
+    
+    // Check if token already exists, if so generate another
+    if (promotionalTokens.has(result)) {
+        return generateTokenCode();
+    }
+    
+    return result;
+}
+
+// Check if token exists and is valid
+function isValidToken(tokenCode) {
+    const token = promotionalTokens.get(tokenCode.toUpperCase());
+    return token && !token.used;
+}
+
+// Mark token as used
+function markTokenAsUsed(tokenCode, orderCode, usedBy) {
+    const token = promotionalTokens.get(tokenCode.toUpperCase());
+    if (token && !token.used) {
+        token.used = true;
+        token.usedAt = Date.now();
+        token.usedBy = usedBy;
+        token.usedInOrder = orderCode;
+        return true;
+    }
+    return false;
 }
 
 // Order status definitions
@@ -266,6 +317,10 @@ const commands = [
         .addAttachmentOption(option =>
             option.setName('attachment')
                 .setDescription('Attach a file/image to the order')
+                .setRequired(false))
+        .addStringOption(option =>
+            option.setName('token_code')
+                .setDescription('Promotional token code (5 characters) - optional')
                 .setRequired(false)),
 
     // Queue Command
@@ -515,6 +570,55 @@ const commands = [
                     { name: 'Newest First', value: 'newest' },
                     { name: 'Oldest First', value: 'oldest' },
                     { name: 'By Order Code', value: 'code' }
+                )),
+
+    // Generate Token Command (Admin only) - Create promotional tokens
+    new SlashCommandBuilder()
+        .setName('generatetoken')
+        .setDescription('Generate a new promotional token (Admin only)')
+        .addStringOption(option =>
+            option.setName('description')
+                .setDescription('Description of what this token is for')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('notes')
+                .setDescription('Additional notes about this token (optional)')
+                .setRequired(false)),
+
+    // Check Token Command (Admin only) - Check token status
+    new SlashCommandBuilder()
+        .setName('checktoken')
+        .setDescription('Check the status and details of a promotional token (Admin only)')
+        .addStringOption(option =>
+            option.setName('token_code')
+                .setDescription('The 5-character token code to check')
+                .setRequired(true)),
+
+    // Remove Token Command (Admin only) - Remove token from system
+    new SlashCommandBuilder()
+        .setName('removetoken')
+        .setDescription('Remove a promotional token from the system (Admin only)')
+        .addStringOption(option =>
+            option.setName('token_code')
+                .setDescription('The 5-character token code to remove')
+                .setRequired(true))
+        .addStringOption(option =>
+            option.setName('reason')
+                .setDescription('Reason for removing this token')
+                .setRequired(true)),
+
+    // List Tokens Command (Admin only) - View all tokens
+    new SlashCommandBuilder()
+        .setName('listtokens')
+        .setDescription('List all promotional tokens in the system (Admin only)')
+        .addStringOption(option =>
+            option.setName('status')
+                .setDescription('Filter by token status')
+                .setRequired(false)
+                .addChoices(
+                    { name: 'All Tokens', value: 'all' },
+                    { name: 'Available', value: 'available' },
+                    { name: 'Used', value: 'used' }
                 ))
 ];
 
@@ -967,14 +1071,14 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
         }
         .header {
             text-align: center;
-            border-bottom: 3px solid #007bff;
+            border-bottom: 3px solid #ff0000ff;
             padding-bottom: 20px;
             margin-bottom: 30px;
         }
         .company-name {
             font-size: 28px;
             font-weight: bold;
-            color: #007bff;
+            color: #ff0000ff;
             margin: 0;
         }
         .receipt-title {
@@ -985,7 +1089,7 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
         .order-code {
             font-size: 18px;
             color: #666;
-            font-weight: bold;
+            font-weight: bold; vb
         }
         .section {
             margin: 25px 0;
@@ -993,7 +1097,7 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
         .section-title {
             font-size: 16px;
             font-weight: bold;
-            color: #007bff;
+            color: #ff0000ff;
             border-bottom: 1px solid #eee;
             padding-bottom: 8px;
             margin-bottom: 15px;
@@ -1048,7 +1152,7 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
             margin: 8px 0;
         }
         .total-row {
-            border-top: 2px solid #007bff;
+            border-top: 2px solid #ff0000ff;
             padding-top: 10px;
             margin-top: 15px;
             font-weight: bold;
@@ -1082,7 +1186,7 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
 <body>
     <div class="receipt">
         <div class="header">
-            <h1 class="company-name">Order Management System</h1>
+            <h1 class="company-name">ExtruDough</h1>
             <h2 class="receipt-title">Order Receipt</h2>
             <div class="order-code">Order #${order.code}</div>
         </div>
@@ -1125,10 +1229,6 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
                 <span class="info-label">Processing Time:</span>
                 <span class="info-value">${completionTime}</span>
             </div>
-            <div class="info-row">
-                <span class="info-label">Completed By:</span>
-                <span class="info-value">Staff Member</span>
-            </div>
         </div>
 
         <div class="section">
@@ -1152,7 +1252,7 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
                     <span>£${pricing.subtotal.toFixed(2)}</span>
                 </div>
                 <div class="price-row">
-                    <span>Tax/VAT:</span>
+                    <span>TAX:</span>
                     <span>£${pricing.tax.toFixed(2)}</span>
                 </div>
                 <div class="price-row total-row">
@@ -1174,7 +1274,7 @@ function generateOrderReceipt(order, customerEmail, priceInfo = null) {
 
         <div class="footer">
             <p>Receipt generated on ${new Date().toLocaleString()}</p>
-            <p>Order Management System | Professional Service Receipt</p>
+            <p>ExtruDough | Custom 3D Manufacturing</p>
             <p>If you have any questions about this order, please contact us with order reference: ${order.code}</p>
         </div>
     </div>
@@ -1693,6 +1793,19 @@ async function handleSlashCommand(interaction) {
                 // Update statistics
                 updateCompletionStatistics(orderToComplete, completedAt);
 
+                // If order has a token, mark it as used
+                if (orderToComplete.tokenCode) {
+                    const token = promotionalTokens.get(orderToComplete.tokenCode);
+                    if (token && !token.used) {
+                        token.used = true;
+                        token.usedAt = completedAt;
+                        token.usedBy = orderToComplete.customerId;
+                        token.usedInOrder = completeOrderCode;
+                        
+                        console.log(`Marked token ${orderToComplete.tokenCode} as used for order ${completeOrderCode}`);
+                    }
+                }
+
                 // Remove from queue
                 orderQueue.delete(completeOrderCode);
 
@@ -1727,8 +1840,18 @@ async function handleSlashCommand(interaction) {
                         { name: 'Final Status', value: `${getStatusEmoji('completed')} ${getStatusName('completed')}`, inline: true },
                         { name: 'Priority', value: `${getPriorityEmoji(orderToComplete.priority)} ${PRIORITIES[orderToComplete.priority].name}`, inline: true },
                         { name: 'Description', value: orderToComplete.description.substring(0, 1024) }
-                    )
-                    .setTimestamp();
+                    );
+
+                // Add token information if a token was used
+                if (orderToComplete.tokenCode) {
+                    completeEmbed.addFields({ 
+                        name: '🎫 Promotional Token', 
+                        value: `Token \`${orderToComplete.tokenCode}\` marked as used`, 
+                        inline: true 
+                    });
+                }
+
+                completeEmbed.setTimestamp();
 
                 await interaction.reply({ embeds: [completeEmbed] });
                 await logOrderAction(interaction.guild, 'Completed', orderToComplete, interaction.user);
@@ -2671,7 +2794,7 @@ async function handleSlashCommand(interaction) {
                     // Add pricing information if provided
                     if (total > 0) {
                         dmReceiptEmbed.addFields(
-                            { name: 'Pricing Details', value: `**Subtotal:** £${subtotal.toFixed(2)}\n**Tax/VAT:** £${tax.toFixed(2)}\n**Total:** £${total.toFixed(2)}`, inline: false }
+                            { name: 'Pricing Details', value: `**Subtotal:** £${subtotal.toFixed(2)}\n**Tax:** £${tax.toFixed(2)}\n**Total:** £${total.toFixed(2)}`, inline: false }
                         );
                     }
 
@@ -2686,7 +2809,7 @@ async function handleSlashCommand(interaction) {
                         }
                     }
 
-                    dmReceiptEmbed.setFooter({ text: `Order Management System | Receipt generated on ${new Date().toLocaleDateString()}` })
+                    dmReceiptEmbed.setFooter({ text: `ExtruDough | Receipt generated on ${new Date().toLocaleDateString()}` })
                         .setTimestamp();
 
                     await customer.send({ embeds: [dmReceiptEmbed] });
@@ -3014,6 +3137,208 @@ async function handleSlashCommand(interaction) {
                 historyEmbed.setTimestamp();
 
                 await interaction.reply({ embeds: [historyEmbed], ephemeral: true });
+                break;
+
+            case 'generatetoken':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to generate tokens.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const tokenDescription = interaction.options.getString('description');
+                const tokenNotes = interaction.options.getString('notes') || '';
+                
+                const newTokenCode = generateTokenCode();
+                const newToken = {
+                    code: newTokenCode,
+                    description: tokenDescription,
+                    notes: tokenNotes,
+                    createdAt: Date.now(),
+                    createdBy: interaction.user.id,
+                    used: false,
+                    usedAt: null,
+                    usedBy: null,
+                    usedInOrder: null
+                };
+
+                promotionalTokens.set(newTokenCode, newToken);
+                saveOrderData();
+
+                const tokenEmbed = new EmbedBuilder()
+                    .setTitle('🎫 Promotional Token Generated')
+                    .setColor(0x00ff00)
+                    .addFields(
+                        { name: 'Token Code', value: `**${newTokenCode}**`, inline: true },
+                        { name: 'Created by', value: `<@${interaction.user.id}>`, inline: true },
+                        { name: 'Status', value: '✅ Available', inline: true },
+                        { name: 'Description', value: tokenDescription, inline: false }
+                    );
+
+                if (tokenNotes) {
+                    tokenEmbed.addFields({ name: 'Notes', value: tokenNotes, inline: false });
+                }
+
+                tokenEmbed.addFields({ 
+                    name: 'Instructions', 
+                    value: '• Write this code on the back of your promotional token\n• Customers can use this token when placing orders\n• Use `/checktoken` to verify token status', 
+                    inline: false 
+                })
+                .setFooter({ text: 'Token ready for distribution' })
+                .setTimestamp();
+
+                await interaction.reply({ embeds: [tokenEmbed], ephemeral: true });
+                break;
+
+            case 'checktoken':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to check tokens.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const checkTokenCode = interaction.options.getString('token_code').toUpperCase();
+                const tokenToCheck = promotionalTokens.get(checkTokenCode);
+
+                if (!tokenToCheck) {
+                    return interaction.reply({ 
+                        content: `❌ Token \`${checkTokenCode}\` not found in the system.`, 
+                        ephemeral: true 
+                    });
+                }
+
+                const checkEmbed = new EmbedBuilder()
+                    .setTitle('🎫 Token Status Check')
+                    .setColor(tokenToCheck.used ? 0xff0000 : 0x00ff00)
+                    .addFields(
+                        { name: 'Token Code', value: `**${tokenToCheck.code}**`, inline: true },
+                        { name: 'Status', value: tokenToCheck.used ? '❌ Used' : '✅ Available', inline: true },
+                        { name: 'Created by', value: `<@${tokenToCheck.createdBy}>`, inline: true },
+                        { name: 'Created', value: `<t:${Math.floor(tokenToCheck.createdAt / 1000)}:F>`, inline: true },
+                        { name: 'Description', value: tokenToCheck.description, inline: false }
+                    );
+
+                if (tokenToCheck.notes) {
+                    checkEmbed.addFields({ name: 'Notes', value: tokenToCheck.notes, inline: false });
+                }
+
+                if (tokenToCheck.used) {
+                    checkEmbed.addFields(
+                        { name: 'Used by', value: `<@${tokenToCheck.usedBy}>`, inline: true },
+                        { name: 'Used in Order', value: tokenToCheck.usedInOrder, inline: true },
+                        { name: 'Used Date', value: `<t:${Math.floor(tokenToCheck.usedAt / 1000)}:F>`, inline: true }
+                    );
+                }
+
+                checkEmbed.setTimestamp();
+
+                await interaction.reply({ embeds: [checkEmbed], ephemeral: true });
+                break;
+
+            case 'removetoken':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to remove tokens.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const removeTokenCode = interaction.options.getString('token_code').toUpperCase();
+                const removeReason = interaction.options.getString('reason');
+                const tokenToRemove = promotionalTokens.get(removeTokenCode);
+
+                if (!tokenToRemove) {
+                    return interaction.reply({ 
+                        content: `❌ Token \`${removeTokenCode}\` not found in the system.`, 
+                        ephemeral: true 
+                    });
+                }
+
+                // Remove the token
+                promotionalTokens.delete(removeTokenCode);
+                saveOrderData();
+
+                const tokenRemoveEmbed = new EmbedBuilder()
+                    .setTitle('🗑️ Token Removed')
+                    .setColor(0xff0000)
+                    .addFields(
+                        { name: 'Token Code', value: `**${removeTokenCode}**`, inline: true },
+                        { name: 'Removed by', value: `<@${interaction.user.id}>`, inline: true },
+                        { name: 'Was Used', value: tokenToRemove.used ? 'Yes' : 'No', inline: true },
+                        { name: 'Original Description', value: tokenToRemove.description, inline: false },
+                        { name: 'Removal Reason', value: removeReason, inline: false }
+                    )
+                    .setFooter({ text: 'Token permanently removed from system' })
+                    .setTimestamp();
+
+                await interaction.reply({ embeds: [tokenRemoveEmbed], ephemeral: true });
+                break;
+
+            case 'listtokens':
+                if (!hasAdminPermissions(interaction.member)) {
+                    return interaction.reply({ 
+                        content: '❌ You don\'t have permission to list tokens.', 
+                        ephemeral: true 
+                    });
+                }
+
+                const statusFilter = interaction.options.getString('status') || 'all';
+                let tokensToShow = Array.from(promotionalTokens.values());
+
+                // Apply status filter
+                if (statusFilter === 'available') {
+                    tokensToShow = tokensToShow.filter(token => !token.used);
+                } else if (statusFilter === 'used') {
+                    tokensToShow = tokensToShow.filter(token => token.used);
+                }
+
+                if (tokensToShow.length === 0) {
+                    return interaction.reply({ 
+                        content: `📭 No tokens found with status: ${statusFilter}`, 
+                        ephemeral: true 
+                    });
+                }
+
+                // Sort by creation date (newest first)
+                tokensToShow.sort((a, b) => b.createdAt - a.createdAt);
+
+                const listEmbed = new EmbedBuilder()
+                    .setTitle('🎫 Promotional Tokens List')
+                    .setColor(0x0099ff)
+                    .setDescription(`Showing ${statusFilter} tokens (${tokensToShow.length} found)`);
+
+                // Show first 10 tokens
+                const tokensToDisplay = tokensToShow.slice(0, 10);
+                const tokenList = tokensToDisplay.map(token => {
+                    const status = token.used ? '❌ Used' : '✅ Available';
+                    const createdDate = new Date(token.createdAt).toLocaleDateString();
+                    const usedInfo = token.used ? ` | Used in ${token.usedInOrder}` : '';
+                    
+                    return `**${token.code}** - ${status}\n└ ${token.description.substring(0, 60)}${token.description.length > 60 ? '...' : ''}\n└ Created: ${createdDate}${usedInfo}`;
+                }).join('\n\n');
+
+                listEmbed.addFields({ name: 'Tokens', value: tokenList || 'No tokens found' });
+
+                // Add summary
+                const totalTokens = promotionalTokens.size;
+                const usedTokens = Array.from(promotionalTokens.values()).filter(t => t.used).length;
+                const availableTokens = totalTokens - usedTokens;
+
+                listEmbed.addFields({
+                    name: 'Summary',
+                    value: `**Total:** ${totalTokens} | **Available:** ${availableTokens} | **Used:** ${usedTokens}`,
+                    inline: false
+                });
+
+                if (tokensToShow.length > 10) {
+                    listEmbed.setFooter({ text: `Showing first 10 of ${tokensToShow.length} tokens` });
+                }
+
+                listEmbed.setTimestamp();
+
+                await interaction.reply({ embeds: [listEmbed], ephemeral: true });
                 break;
 
             default:

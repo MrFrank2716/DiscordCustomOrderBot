@@ -5,7 +5,7 @@ A Discord bot designed to help track and process orders through your Discord ser
 ## Features
 
 ### Core Order Management Commands
-- **`/createorder`** - Create a new order from a ticket using interactive dropdown menus (supports file attachments)
+- **`/createorder`** - Create a new order from a ticket using interactive dropdown menus (supports file attachments and promotional tokens)
 - **`/queue`** - View all current orders in the queue with priorities and statuses
 - **`/complete`** - Mark an order as complete and remove it from the queue
 - **`/updatestatus`** - Update the status of an existing order using dropdown menu
@@ -34,6 +34,12 @@ A Discord bot designed to help track and process orders through your Discord ser
 ### Receipt System
 - **`/sendreceipt`** - Send professional receipts to customers via email and Discord DM (Admin only)
 
+### Promotional Token System (Admin Only)
+- **`/generatetoken`** - Generate a new promotional token with description and notes
+- **`/checktoken`** - Check if a token is valid or already used, view token details
+- **`/removetoken`** - Manually remove a token from the system with reason
+- **`/listtokens`** - List all promotional tokens with filtering by status
+
 ### Customer Commands
 - **`/position`** - Check your position in the queue
 - **`/orderstatus`** - Check the detailed status of a specific order
@@ -46,6 +52,7 @@ A Discord bot designed to help track and process orders through your Discord ser
 ✅ **Professional Label Printing** - Generate and email 4"x6" order labels directly to your printer  
 ✅ **Professional Receipt System** - Send beautiful HTML receipts via email and Discord DM  
 ✅ **Customer Review System** - Verified customers can review completed orders with ratings and images  
+✅ **Promotional Token System** - Generate, manage, and track promotional tokens for marketing campaigns  
 ✅ **Automatic Data Persistence** - All order data is automatically saved after every command  
 ✅ **Thread-Based Ticket Integration** - No longer moves tickets to categories, uses thread links  
 ✅ **Priority System** - Orders can be set with different priorities (Low, Normal, High, Urgent)  
@@ -169,7 +176,9 @@ Double-click `manage-bot.bat` for a menu-driven interface to manage your bot.
   - `description` (required) - Description of the order
   - `customer` (optional) - The customer (defaults to command user)
   - `attachment` (optional) - Attach a file/image to the order
+  - `token_code` (optional) - Apply a promotional token to the order
 - **Interactive Elements**: Priority and status dropdown menus
+- **Features**: Validates promotional tokens if provided
 - **Permissions**: Requires Manage Channels permission
 
 ### `/findorder`
@@ -275,6 +284,84 @@ Double-click `manage-bot.bat` for a menu-driven interface to manage your bot.
   - `order_code` (required) - The order code to remove
 - **Permissions**: Requires Manage Channels permission
 
+## Promotional Token System
+
+The bot includes a comprehensive promotional token system for marketing campaigns and special offers.
+
+### How Promotional Tokens Work
+1. **Admin generates tokens** using `/generatetoken` with descriptions and notes
+2. **Tokens are 5-character alphanumeric codes** (e.g., A1B2C, X9Y8Z)
+3. **Customers provide token codes** when placing orders via `/createorder`
+4. **Tokens are automatically marked as used** when the order is completed
+5. **Admin can track usage** and manage tokens through various commands
+
+### Token Management Commands
+
+### `/generatetoken`
+- **Description**: Generate a new promotional token
+- **Options**:
+  - `description` (required) - Description of what the token is for
+  - `notes` (optional) - Additional notes about the token
+- **Features**: 
+  - Generates unique 5-character alphanumeric codes
+  - Provides instructions for physical token distribution
+  - Tracks creation date and creator
+- **Permissions**: Admin only
+
+### `/checktoken`
+- **Description**: Check if a token is valid or already used
+- **Options**:
+  - `token_code` (required) - The token code to check
+- **Features**: 
+  - Shows token status (available/used)
+  - Displays creation details and usage history
+  - Shows which order used the token (if applicable)
+- **Permissions**: Admin only
+
+### `/removetoken`
+- **Description**: Manually remove a token from the system
+- **Options**:
+  - `token_code` (required) - The token code to remove
+  - `reason` (required) - Reason for removal
+- **Features**: 
+  - Permanently deletes token from system
+  - Records removal reason and administrator
+  - Shows original token details before removal
+- **Permissions**: Admin only
+
+### `/listtokens`
+- **Description**: List all promotional tokens with filtering
+- **Options**:
+  - `status` (optional) - Filter by status: all, available, used
+- **Features**: 
+  - Shows up to 10 tokens per page
+  - Displays creation dates and usage information
+  - Provides summary statistics
+- **Permissions**: Admin only
+
+### Token Integration with Orders
+- **Order Creation**: Add `token_code` parameter to `/createorder`
+- **Validation**: Bot automatically validates token exists and is unused
+- **Auto-Usage**: Tokens are automatically marked as used when order completes
+- **Tracking**: Full audit trail of token usage with order codes and dates
+
+### Token Security Features
+- **Unique Codes**: Each token has a unique 5-character code
+- **Usage Tracking**: Full history of when and how tokens were used
+- **Admin Control**: Only administrators can generate, check, and remove tokens
+- **Audit Trail**: Complete logging of all token operations
+
+### Example Token Workflow
+```
+1. Admin: /generatetoken description:"10% Off September Promo" notes:"Valid until Sept 30"
+2. Bot generates: Token A1B2C created
+3. Admin writes A1B2C on physical promotional cards
+4. Customer: Uses token when placing order
+5. Staff: /createorder token_code:A1B2C (validates and applies token)
+6. Staff: /complete order_code:ED001 (automatically marks token as used)
+7. Admin: /checktoken token_code:A1B2C (shows used status and order details)
+```
+
 ## Order Status System
 
 Orders now have detailed status tracking throughout their lifecycle:
@@ -340,6 +427,7 @@ The bot now uses **JSON file persistence** for reliable data storage:
 - `statistics.json` - Analytics and performance data
 - `dependencies.json` - Order dependency relationships
 - `due_dates.json` - Order due date tracking
+- `tokens.json` - Promotional token data and usage tracking
 
 ### Manual Data Management
 - **`/savedata`** - Force save all data immediately (Admin only)
